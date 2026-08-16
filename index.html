@@ -1,0 +1,508 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Virtual Try-On — Occhiali 3D</title>
+<style>
+  :root {
+    --bronze: #1a1512;
+    --gold: #c79c43;
+    --cream: #f6f2ea;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    background: var(--bronze);
+    color: var(--cream);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    padding: 24px 16px 40px;
+  }
+  header { text-align: center; margin-bottom: 20px; }
+  h1 {
+    font-weight: 300;
+    letter-spacing: 3px;
+    font-size: 22px;
+    text-transform: uppercase;
+    color: var(--gold);
+  }
+  header p { font-size: 13px; opacity: 0.6; margin-top: 6px; }
+
+  #stage {
+    position: relative;
+    width: min(640px, 92vw);
+    aspect-ratio: 4 / 3; /* valore iniziale, corretto via JS con l'aspect ratio reale della fotocamera */
+    background: #000;
+    border-radius: 12px;
+    overflow: hidden;
+    border: 1px solid rgba(199,156,67,0.35);
+    box-shadow: 0 20px 60px rgba(0,0,0,0.5);
+  }
+  #mirror-wrap {
+    position: absolute;
+    inset: 0;
+    transform: scaleX(-1); /* effetto specchio, video + 3D insieme */
+  }
+  video, canvas#gl {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+  }
+  video { z-index: 1; }
+  canvas#gl { z-index: 2; pointer-events: none; }
+
+  #status {
+    position: absolute;
+    top: 10px; left: 10px;
+    z-index: 5;
+    font-size: 11px;
+    padding: 5px 10px;
+    border-radius: 20px;
+    background: rgba(0,0,0,0.55);
+    letter-spacing: 0.5px;
+  }
+  #status.ok { color: #7be08a; }
+  #status.wait { color: #e0c37b; }
+  #status.err { color: #e07b7b; }
+
+  #start-overlay {
+    position: absolute; inset: 0; z-index: 10;
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    background: rgba(10,8,6,0.92);
+    gap: 14px;
+    text-align: center;
+    padding: 20px;
+  }
+  #start-overlay button {
+    background: linear-gradient(135deg, #8f6f2c, #c79c43, #f1d27a, #a77d31);
+    color: #1a1512;
+    border: none;
+    padding: 12px 28px;
+    font-size: 14px;
+    font-weight: 600;
+    letter-spacing: 1px;
+    border-radius: 30px;
+    cursor: pointer;
+    text-transform: uppercase;
+  }
+  #start-overlay small { opacity: 0.55; max-width: 380px; font-size: 12px; line-height: 1.5; }
+
+  #controls {
+    width: min(640px, 92vw);
+    margin-top: 18px;
+  }
+  #glasses-picker {
+    display: flex;
+    gap: 10px;
+    justify-content: center;
+    flex-wrap: wrap;
+    margin-bottom: 16px;
+  }
+  .g-btn {
+    background: rgba(255,255,255,0.05);
+    border: 1px solid rgba(199,156,67,0.3);
+    color: var(--cream);
+    padding: 10px 16px;
+    border-radius: 8px;
+    cursor: pointer;
+    font-size: 13px;
+    transition: all 0.15s;
+  }
+  .g-btn:hover { border-color: var(--gold); }
+  .g-btn.active {
+    background: rgba(199,156,67,0.18);
+    border-color: var(--gold);
+    color: var(--gold);
+  }
+
+  details {
+    background: rgba(255,255,255,0.03);
+    border: 1px solid rgba(199,156,67,0.15);
+    border-radius: 8px;
+    padding: 10px 14px;
+    font-size: 12px;
+  }
+  summary { cursor: pointer; color: var(--gold); letter-spacing: 0.5px; }
+  .sliders { margin-top: 12px; display: grid; grid-template-columns: 1fr 1fr; gap: 10px 18px; }
+  .slider-row { display: flex; flex-direction: column; gap: 4px; }
+  .slider-row label { display: flex; justify-content: space-between; opacity: 0.7; }
+  input[type=range] { width: 100%; accent-color: var(--gold); }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>Virtual Try-On</h1>
+  <p>Prova le montature 3D in tempo reale</p>
+</header>
+
+<div id="stage">
+  <div id="start-overlay">
+    <button id="start-btn">Attiva fotocamera</button>
+    <small>Il video resta nel tuo browser: nessun frame viene inviato altrove. Serve per posizionare l'occhiale 3D sul volto in tempo reale.</small>
+  </div>
+  <div id="status" class="wait" style="display:none;">Inizializzazione…</div>
+  <div id="mirror-wrap">
+    <video id="video" autoplay playsinline muted></video>
+    <canvas id="gl"></canvas>
+  </div>
+</div>
+
+<div id="controls">
+  <div id="glasses-picker">
+    <button class="g-btn active" data-model="sunglasses">Sunglasses</button>
+    <button class="g-btn" data-model="classic">Classic</button>
+    <button class="g-btn" data-model="glass">Glass</button>
+    <button class="g-btn" data-model="sun-12983">Sun 12983</button>
+  </div>
+
+  <details>
+    <summary>Calibrazione manuale (regolazioni fini, opzionale)</summary>
+    <div class="sliders">
+      <div class="slider-row">
+        <label><span>Scala</span><span id="v-scale">1.00</span></label>
+        <input type="range" id="s-scale" min="0.6" max="1.5" step="0.01" value="1">
+      </div>
+      <div class="slider-row">
+        <label><span>Alto / Basso (cm)</span><span id="v-y">0.0</span></label>
+        <input type="range" id="s-y" min="-4" max="4" step="0.1" value="0">
+      </div>
+      <div class="slider-row">
+        <label><span>Avanti / Indietro (cm)</span><span id="v-z">0.0</span></label>
+        <input type="range" id="s-z" min="-6" max="6" step="0.1" value="0">
+      </div>
+      <div class="slider-row">
+        <label><span>Sinistra / Destra (cm)</span><span id="v-x">0.0</span></label>
+        <input type="range" id="s-x" min="-4" max="4" step="0.1" value="0">
+      </div>
+    </div>
+  </details>
+</div>
+
+<script type="importmap">
+{
+  "imports": {
+    "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+    "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
+  }
+}
+</script>
+
+<script type="module">
+import * as THREE from "three";
+import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
+import { FaceLandmarker, FilesetResolver } from "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/vision_bundle.mjs";
+
+const statusEl = document.getElementById('status');
+const startOverlay = document.getElementById('start-overlay');
+const startBtn = document.getElementById('start-btn');
+const video = document.getElementById('video');
+const glCanvas = document.getElementById('gl');
+const stage = document.getElementById('stage');
+
+function setStatus(text, cls) {
+  statusEl.style.display = 'block';
+  statusEl.textContent = text;
+  statusEl.className = cls;
+}
+
+// ---------- Three.js setup ----------
+const renderer = new THREE.WebGLRenderer({ canvas: glCanvas, alpha: true, antialias: true });
+renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+
+const scene = new THREE.Scene();
+
+// Luce coerente per materiali PBR degli occhiali (setup semplice, tre punti)
+scene.add(new THREE.AmbientLight(0xffffff, 0.7));
+const keyLight = new THREE.DirectionalLight(0xffffff, 0.9);
+keyLight.position.set(0.3, 0.5, 1);
+scene.add(keyLight);
+const rimLight = new THREE.DirectionalLight(0xfff2d0, 0.4);
+rimLight.position.set(-0.5, 0.2, -0.5);
+scene.add(rimLight);
+
+// Camera prospettica: FOV calcolato assumendo focale ≈ altezza immagine
+// (convenzione usata dalla facialTransformationMatrix di MediaPipe per
+// restare coerente con lo spazio della camera restituito dal modello).
+// IMPORTANTE: MediaPipe non restituisce le coordinate in metri ma in una unità
+// propria (empiricamente ≈ 1 unità ≈ 1 millimetro: un volto a distanza normale
+// dalla webcam risulta a circa -50/-60 unità di profondità). Near/far vanno
+// dimensionati di conseguenza — con i vecchi 0.01/10 (pensati per i metri)
+// il volto risultava sempre oltre il piano di clip lontano, quindi tagliato
+// via e mai disegnato, anche quando il tracciamento funzionava perfettamente.
+let camera = new THREE.PerspectiveCamera(55, 4 / 3, 1, 2000);
+camera.position.set(0, 0, 0);
+
+// Fattore di conversione: i modelli .glb sono stati disegnati in metri
+// (es. raggio lente ≈ 0.05 = 5cm). Nello spazio di MediaPipe (≈ millimetri)
+// la stessa lente deve misurare ≈ 50 unità, quindi si moltiplica per 1000.
+// Valore corretto in base alla documentazione ufficiale Google (non più a occhio):
+// "A metric unit used by the default canonical face model is a centimeter"
+// (developers.googleblog.com/mediapipe-3d-face-transform). I modelli .glb sono
+// in metri, quindi il fattore di conversione esatto metri→cm è ×100.
+const MEDIAPIPE_UNIT_SCALE = 100;
+
+// Anchor: riceve la matrice di trasformazione del volto ad ogni frame.
+const faceAnchor = new THREE.Group();
+faceAnchor.visible = false;
+scene.add(faceAnchor);
+
+// Offset di calibrazione manuale (sliders), applicato come figlio dell'anchor.
+const calibGroup = new THREE.Group();
+faceAnchor.add(calibGroup);
+
+// Sfera di debug: mostra dove l'anchor pensa di trovare il volto, indipendentemente
+// dal modello 3D degli occhiali — utile per capire se il problema è nel tracking
+// (ancoraggio) o nel modello (mai caricato/mai visibile). Attivabile con ?debug=1
+// nell'URL o cliccando 3 volte sul badge di stato.
+const debugMode = new URLSearchParams(location.search).has('debug');
+const debugSphere = new THREE.Mesh(
+  new THREE.SphereGeometry(3, 12, 12), // raggio in unità MediaPipe (~mm), non più metri
+  new THREE.MeshBasicMaterial({ color: 0xff3355 })
+);
+debugSphere.visible = false;
+faceAnchor.add(debugSphere);
+
+const debugInfo = document.createElement('div');
+debugInfo.style.cssText = 'position:absolute;bottom:6px;left:6px;z-index:6;font:10px monospace;color:#7be08a;background:rgba(0,0,0,0.6);padding:3px 8px;border-radius:6px;display:' + (debugMode ? 'block' : 'none') + ';';
+document.getElementById('stage').appendChild(debugInfo);
+
+/**
+ * MediaPipe FaceLandmarker restituisce la facialTransformationMatrix come array
+ * piatto di 16 numeri, ma la convenzione riga/colonna non è sempre garantita
+ * uguale in tutte le versioni della libreria. Una matrice affine valida ha
+ * SEMPRE l'ultima riga = [0,0,0,1]: la usiamo come test per capire come leggere
+ * l'array, invece di assumere alla cieca column-major (standard WebGL/Three.js).
+ */
+function matrixFromMediapipe(data) {
+  const colMajor = new THREE.Matrix4().fromArray(data);
+  const e = colMajor.elements; // three.js conserva sempre gli elements in column-major
+  const lastRowColMajor = [e[3], e[7], e[11], e[15]];
+  const looksValid =
+    Math.abs(lastRowColMajor[0]) < 0.02 &&
+    Math.abs(lastRowColMajor[1]) < 0.02 &&
+    Math.abs(lastRowColMajor[2]) < 0.02 &&
+    Math.abs(lastRowColMajor[3] - 1) < 0.02;
+  if (looksValid) return colMajor;
+  // Altrimenti l'array era in row-major: la trasposizione lo corregge.
+  return new THREE.Matrix4().fromArray(data).transpose();
+}
+
+const glassesModels = {}; // nome -> THREE.Group (clonabile)
+let currentGlasses = null;
+let currentModelName = 'sunglasses';
+
+const loader = new GLTFLoader();
+
+const MODEL_FILES = {
+  "sunglasses": { url: "models/Sunglasses.glb", rotateX: 0 },
+  "classic":    { url: "models/10320_Sunglasses.glb", rotateX: Math.PI / 2 },
+  "glass":      { url: "models/glass.glb", rotateX: 0 },
+  "sun-12983":  { url: "models/12983_Sunglasses.glb", rotateX: Math.PI / 2 }
+};
+
+function prepareModel(group, config) {
+  group.rotation.x = config.rotateX || 0;
+  group.updateMatrixWorld(true);
+  let box = new THREE.Box3().setFromObject(group);
+  const size = new THREE.Vector3();
+  const center = new THREE.Vector3();
+  box.getSize(size); box.getCenter(center);
+  group.position.sub(center);
+  const width = Math.max(size.x, size.y, size.z);
+  if (width > 0) group.scale.multiplyScalar(0.14 / width);
+  group.traverse(o => {
+    if (!o.isMesh) return;
+    o.castShadow = false; o.receiveShadow = false;
+    if (o.material) {
+      const mats = Array.isArray(o.material) ? o.material : [o.material];
+      mats.forEach(m => { m.side = THREE.DoubleSide; m.needsUpdate = true; });
+    }
+  });
+}
+
+function loadGlassesModels() {
+  const entries = Object.entries(MODEL_FILES);
+  let loaded = 0;
+  entries.forEach(([name, config]) => {
+    loader.load(config.url, (gltf) => {
+      const group = gltf.scene;
+      prepareModel(group, config);
+      group.visible = false;
+      glassesModels[name] = group;
+      calibGroup.add(group);
+      loaded++;
+      if (name === currentModelName) showModel(name);
+      if (loaded === entries.length) setStatus('Modelli 3D pronti', 'ok');
+    }, undefined, (err) => {
+      console.error('Errore caricamento modello', name, err);
+      setStatus('Errore caricamento ' + name, 'err');
+    });
+  });
+}
+
+function showModel(name) {
+  Object.values(glassesModels).forEach(g => g.visible = false);
+  if (glassesModels[name]) {
+    glassesModels[name].visible = true;
+    currentGlasses = glassesModels[name];
+  }
+  currentModelName = name;
+}
+
+// ---------- Slider di calibrazione manuale ----------
+const sScale = document.getElementById('s-scale');
+const sX = document.getElementById('s-x');
+const sY = document.getElementById('s-y');
+const sZ = document.getElementById('s-z');
+const vScale = document.getElementById('v-scale');
+const vX = document.getElementById('v-x');
+const vY = document.getElementById('v-y');
+const vZ = document.getElementById('v-z');
+
+function applyCalibration() {
+  const userScale = parseFloat(sScale.value);
+  // Scala reale applicata = fattore fisso metri→unità MediaPipe × il
+  // moltiplicatore scelto dall'utente sullo slider (che resta 0.5–1.8, intuitivo).
+  const realScale = userScale * MEDIAPIPE_UNIT_SCALE;
+  calibGroup.scale.set(realScale, realScale, realScale);
+  calibGroup.position.set(parseFloat(sX.value), parseFloat(sY.value), parseFloat(sZ.value));
+  vScale.textContent = userScale.toFixed(2);
+  vX.textContent = parseFloat(sX.value).toFixed(1);
+  vY.textContent = parseFloat(sY.value).toFixed(1);
+  vZ.textContent = parseFloat(sZ.value).toFixed(1);
+}
+[sScale, sX, sY, sZ].forEach(s => s.addEventListener('input', applyCalibration));
+applyCalibration();
+
+document.querySelectorAll('.g-btn').forEach(btn => {
+  btn.addEventListener('click', () => {
+    document.querySelectorAll('.g-btn').forEach(b => b.classList.remove('active'));
+    btn.classList.add('active');
+    showModel(btn.dataset.model);
+  });
+});
+
+// ---------- Face tracking (MediaPipe Face Landmarker) ----------
+let faceLandmarker = null;
+let running = false;
+
+async function initFaceLandmarker() {
+  setStatus('Carico il modello di rilevamento volto…', 'wait');
+  const filesetResolver = await FilesetResolver.forVisionTasks(
+    "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/wasm"
+  );
+  faceLandmarker = await FaceLandmarker.createFromOptions(filesetResolver, {
+    baseOptions: {
+      modelAssetPath: "https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task",
+      delegate: "GPU"
+    },
+    outputFaceBlendshapes: false,
+    outputFacialTransformationMatrixes: true,
+    runningMode: "VIDEO",
+    numFaces: 1
+  });
+}
+
+async function startCamera() {
+  const stream = await navigator.mediaDevices.getUserMedia({
+    video: { width: { ideal: 640 }, height: { ideal: 480 }, facingMode: 'user' },
+    audio: false
+  });
+  video.srcObject = stream;
+  await new Promise(resolve => { video.onloadedmetadata = resolve; });
+  video.play();
+
+  // FONDAMENTALE: il riquadro deve avere le stesse proporzioni del flusso video
+  // reale della fotocamera, altrimenti object-fit:cover ritaglia il video in modo
+  // asimmetrico e le coordinate del volto calcolate da MediaPipe (sul frame intero,
+  // non ritagliato) non corrispondono più a dove il video viene davvero disegnato
+  // sullo schermo — gli occhiali finiscono spostati o del tutto fuori vista.
+  // Su iPhone/Safari il flusso reale è quasi sempre diverso dal 4:3 di default.
+  if (video.videoWidth && video.videoHeight) {
+    stage.style.aspectRatio = `${video.videoWidth} / ${video.videoHeight}`;
+  }
+}
+
+function resizeRenderer() {
+  const rect = stage.getBoundingClientRect();
+  renderer.setSize(rect.width, rect.height, false);
+  camera.aspect = rect.width / rect.height;
+  camera.updateProjectionMatrix();
+}
+window.addEventListener('resize', resizeRenderer);
+
+let lastVideoTime = -1;
+let noFaceFrames = 0;
+
+function renderLoop() {
+  if (!running) return;
+  requestAnimationFrame(renderLoop);
+
+  if (video.readyState < 2) return;
+
+  if (video.currentTime !== lastVideoTime) {
+    lastVideoTime = video.currentTime;
+    const results = faceLandmarker.detectForVideo(video, performance.now());
+
+    if (results.facialTransformationMatrixes && results.facialTransformationMatrixes.length > 0) {
+      noFaceFrames = 0;
+      const m = results.facialTransformationMatrixes[0].data;
+      const mat = matrixFromMediapipe(m);
+      mat.decompose(faceAnchor.position, faceAnchor.quaternion, faceAnchor.scale);
+
+      // Sicurezza: una scala anomala (0, negativa o enorme) indica quasi sempre
+      // un problema di lettura della matrice più che un volto "malformato" —
+      // meglio ignorare il frame che mostrare l'occhiale fuori scala/invisibile.
+      const s = faceAnchor.scale;
+      const scaleOk = s.x > 0.2 && s.x < 5 && s.y > 0.2 && s.y < 5 && s.z > 0.2 && s.z < 5;
+      faceAnchor.visible = scaleOk;
+      setStatus(scaleOk ? 'Volto rilevato' : 'Volto rilevato (dati instabili)', scaleOk ? 'ok' : 'wait');
+
+      if (debugMode) {
+        debugSphere.visible = true;
+        debugInfo.textContent =
+          `pos ${faceAnchor.position.x.toFixed(3)}, ${faceAnchor.position.y.toFixed(3)}, ${faceAnchor.position.z.toFixed(3)} | ` +
+          `scale ${s.x.toFixed(2)}, ${s.y.toFixed(2)}, ${s.z.toFixed(2)}`;
+      }
+    } else {
+      noFaceFrames++;
+      if (noFaceFrames > 8) {
+        setStatus('Nessun volto rilevato — inquadra il viso', 'wait');
+        faceAnchor.visible = false;
+        debugSphere.visible = false;
+      }
+    }
+  }
+
+  renderer.render(scene, camera);
+}
+
+startBtn.addEventListener('click', async () => {
+  try {
+    setStatus('Richiesta accesso fotocamera…', 'wait');
+    statusEl.style.display = 'block';
+    await startCamera();
+    // Doppio requestAnimationFrame: dà al browser il tempo di applicare il nuovo
+    // aspect-ratio del riquadro (impostato in startCamera) prima di misurarlo.
+    await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));
+    resizeRenderer();
+    await initFaceLandmarker();
+    loadGlassesModels();
+    startOverlay.style.display = 'none';
+    running = true;
+    setStatus('Inquadra il volto…', 'wait');
+    renderLoop();
+  } catch (err) {
+    console.error(err);
+    setStatus('Errore: ' + (err.message || err), 'err');
+  }
+});
+</script>
+</body>
+</html>
