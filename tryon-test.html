@@ -168,16 +168,16 @@
         <input type="range" id="s-scale" min="0.5" max="1.8" step="0.01" value="1">
       </div>
       <div class="slider-row">
-        <label><span>Alto / Basso</span><span id="v-y">0.000</span></label>
-        <input type="range" id="s-y" min="-0.04" max="0.04" step="0.001" value="0">
+        <label><span>Alto / Basso</span><span id="v-y">0.0</span></label>
+        <input type="range" id="s-y" min="-25" max="25" step="0.5" value="0">
       </div>
       <div class="slider-row">
-        <label><span>Avanti / Indietro</span><span id="v-z">0.000</span></label>
-        <input type="range" id="s-z" min="-0.03" max="0.03" step="0.001" value="0">
+        <label><span>Avanti / Indietro</span><span id="v-z">0.0</span></label>
+        <input type="range" id="s-z" min="-30" max="30" step="0.5" value="0">
       </div>
       <div class="slider-row">
-        <label><span>Sinistra / Destra</span><span id="v-x">0.000</span></label>
-        <input type="range" id="s-x" min="-0.03" max="0.03" step="0.001" value="0">
+        <label><span>Sinistra / Destra</span><span id="v-x">0.0</span></label>
+        <input type="range" id="s-x" min="-25" max="25" step="0.5" value="0">
       </div>
     </div>
   </details>
@@ -235,8 +235,19 @@ scene.add(rimLight);
 // Camera prospettica: FOV calcolato assumendo focale ≈ altezza immagine
 // (convenzione usata dalla facialTransformationMatrix di MediaPipe per
 // restare coerente con lo spazio della camera restituito dal modello).
-let camera = new THREE.PerspectiveCamera(55, 4 / 3, 0.01, 10);
+// IMPORTANTE: MediaPipe non restituisce le coordinate in metri ma in una unità
+// propria (empiricamente ≈ 1 unità ≈ 1 millimetro: un volto a distanza normale
+// dalla webcam risulta a circa -50/-60 unità di profondità). Near/far vanno
+// dimensionati di conseguenza — con i vecchi 0.01/10 (pensati per i metri)
+// il volto risultava sempre oltre il piano di clip lontano, quindi tagliato
+// via e mai disegnato, anche quando il tracciamento funzionava perfettamente.
+let camera = new THREE.PerspectiveCamera(55, 4 / 3, 1, 2000);
 camera.position.set(0, 0, 0);
+
+// Fattore di conversione: i modelli .glb sono stati disegnati in metri
+// (es. raggio lente ≈ 0.05 = 5cm). Nello spazio di MediaPipe (≈ millimetri)
+// la stessa lente deve misurare ≈ 50 unità, quindi si moltiplica per 1000.
+const MEDIAPIPE_UNIT_SCALE = 1000;
 
 // Anchor: riceve la matrice di trasformazione del volto ad ogni frame.
 const faceAnchor = new THREE.Group();
@@ -253,7 +264,7 @@ faceAnchor.add(calibGroup);
 // nell'URL o cliccando 3 volte sul badge di stato.
 const debugMode = new URLSearchParams(location.search).has('debug');
 const debugSphere = new THREE.Mesh(
-  new THREE.SphereGeometry(0.01, 12, 12),
+  new THREE.SphereGeometry(3, 12, 12), // raggio in unità MediaPipe (~mm), non più metri
   new THREE.MeshBasicMaterial({ color: 0xff3355 })
 );
 debugSphere.visible = false;
@@ -337,13 +348,16 @@ const vY = document.getElementById('v-y');
 const vZ = document.getElementById('v-z');
 
 function applyCalibration() {
-  const scale = parseFloat(sScale.value);
-  calibGroup.scale.set(scale, scale, scale);
+  const userScale = parseFloat(sScale.value);
+  // Scala reale applicata = fattore fisso metri→unità MediaPipe (1000) × il
+  // moltiplicatore scelto dall'utente sullo slider (che resta 0.5–1.8, intuitivo).
+  const realScale = userScale * MEDIAPIPE_UNIT_SCALE;
+  calibGroup.scale.set(realScale, realScale, realScale);
   calibGroup.position.set(parseFloat(sX.value), parseFloat(sY.value), parseFloat(sZ.value));
-  vScale.textContent = scale.toFixed(2);
-  vX.textContent = parseFloat(sX.value).toFixed(3);
-  vY.textContent = parseFloat(sY.value).toFixed(3);
-  vZ.textContent = parseFloat(sZ.value).toFixed(3);
+  vScale.textContent = userScale.toFixed(2);
+  vX.textContent = parseFloat(sX.value).toFixed(1);
+  vY.textContent = parseFloat(sY.value).toFixed(1);
+  vZ.textContent = parseFloat(sZ.value).toFixed(1);
 }
 [sScale, sX, sY, sZ].forEach(s => s.addEventListener('input', applyCalibration));
 applyCalibration();
