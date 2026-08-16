@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Virtual Try-On — Occhiali da Sole 3D (prototipo test)</title>
+<title>Virtual Try-On — 3D Glasses Test</title>
 <style>
   :root {
     --bronze: #1a1512;
@@ -132,13 +132,70 @@
   .slider-row { display: flex; flex-direction: column; gap: 4px; }
   .slider-row label { display: flex; justify-content: space-between; opacity: 0.7; }
   input[type=range] { width: 100%; accent-color: var(--gold); }
+
+  .model-tools{
+    margin: 0 0 16px;
+    padding: 14px;
+    border: 1px solid rgba(199,156,67,.18);
+    border-radius: 10px;
+    background: rgba(255,255,255,.035);
+  }
+  .model-tools-title{
+    color: var(--gold);
+    font-size: 12px;
+    letter-spacing: .9px;
+    text-transform: uppercase;
+    margin-bottom: 9px;
+  }
+  .model-tools-row{
+    display:flex;
+    gap:10px;
+    flex-wrap:wrap;
+    align-items:center;
+  }
+  .file-label{
+    display:inline-flex;
+    align-items:center;
+    justify-content:center;
+    min-height:40px;
+    padding:9px 15px;
+    border-radius:8px;
+    border:1px solid rgba(199,156,67,.45);
+    color:var(--cream);
+    background:rgba(199,156,67,.08);
+    cursor:pointer;
+    font-size:12px;
+  }
+  .file-label:hover{ border-color:var(--gold); }
+  #glb-file{ display:none; }
+  #loaded-file{
+    flex:1;
+    min-width:180px;
+    font-size:11px;
+    opacity:.62;
+    overflow:hidden;
+    text-overflow:ellipsis;
+    white-space:nowrap;
+  }
+  .hint{
+    margin-top:8px;
+    font-size:10px;
+    line-height:1.45;
+    opacity:.45;
+  }
+  @media (max-width:560px){
+    body{padding:14px 10px 28px}
+    #stage,#controls{width:96vw}
+    .sliders{grid-template-columns:1fr}
+  }
+
 </style>
 </head>
 <body>
 
 <header>
   <h1>Virtual Try-On</h1>
-  <p>Prototipo di test — occhiali 3D placeholder, face tracking in tempo reale</p>
+  <p>Face tracking in tempo reale · prova montature 3D sul volto</p>
 </header>
 
 <div id="stage">
@@ -154,10 +211,20 @@
 </div>
 
 <div id="controls">
+  <div class="model-tools">
+    <div class="model-tools-title">Modello 3D reale</div>
+    <div class="model-tools-row">
+      <label class="file-label" for="glb-file">Carica .GLB</label>
+      <input id="glb-file" type="file" accept=".glb,model/gltf-binary">
+      <div id="loaded-file">Nessun GLB esterno caricato</div>
+    </div>
+    <div class="hint">Per il browser i modelli Cinema 4D (.c4d) e Blender (.blend) devono essere esportati in formato GLB/glTF. Il file GLB viene letto localmente e non viene caricato su server.</div>
+  </div>
+
   <div id="glasses-picker">
-    <button class="g-btn active" data-model="aviator-gold">Aviator Gold</button>
-    <button class="g-btn" data-model="wayfarer-black">Wayfarer Black</button>
-    <button class="g-btn" data-model="round-tortoise">Round Tortoise</button>
+    <button class="g-btn active" data-model="aviator-gold">Aviator Gold · Test</button>
+    <button class="g-btn" data-model="wayfarer-black">Wayfarer Black · Test</button>
+    <button class="g-btn" data-model="round-tortoise">Round Tortoise · Test</button>
   </div>
 
   <details>
@@ -304,6 +371,75 @@ let currentGlasses = null;
 let currentModelName = 'aviator-gold';
 
 const loader = new GLTFLoader();
+const glbFileInput = document.getElementById('glb-file');
+const loadedFileEl = document.getElementById('loaded-file');
+let externalModel = null;
+
+function normalizeExternalModel(group) {
+  // Centra il modello sull'origine e lo normalizza a una larghezza fisica
+  // indicativa di 14 cm. Questo evita che GLB esportati con unità diverse
+  // appaiano enormi o microscopici.
+  group.updateMatrixWorld(true);
+  const box = new THREE.Box3().setFromObject(group);
+  const size = new THREE.Vector3();
+  const center = new THREE.Vector3();
+  box.getSize(size);
+  box.getCenter(center);
+
+  group.position.sub(center);
+
+  const width = Math.max(size.x, size.y, size.z);
+  if (Number.isFinite(width) && width > 0) {
+    const targetWidthMeters = 0.14;
+    const k = targetWidthMeters / width;
+    group.scale.multiplyScalar(k);
+  }
+
+  // Orientamento iniziale neutro; gli slider restano disponibili per le rifiniture.
+  group.rotation.set(0, 0, 0);
+}
+
+function loadExternalGlb(file) {
+  if (!file) return;
+  const url = URL.createObjectURL(file);
+
+  loader.load(url, (gltf) => {
+    URL.revokeObjectURL(url);
+
+    if (externalModel) {
+      calibGroup.remove(externalModel);
+      externalModel.traverse(obj => {
+        if (obj.geometry) obj.geometry.dispose?.();
+        if (obj.material) {
+          const mats = Array.isArray(obj.material) ? obj.material : [obj.material];
+          mats.forEach(m => m.dispose?.());
+        }
+      });
+    }
+
+    externalModel = gltf.scene;
+    normalizeExternalModel(externalModel);
+
+    Object.values(glassesModels).forEach(g => g.visible = false);
+    externalModel.visible = true;
+    calibGroup.add(externalModel);
+    currentGlasses = externalModel;
+    currentModelName = '__external__';
+
+    document.querySelectorAll('.g-btn').forEach(b => b.classList.remove('active'));
+    loadedFileEl.textContent = file.name;
+    setStatus('GLB caricato — inquadra il volto', 'ok');
+  }, undefined, (err) => {
+    URL.revokeObjectURL(url);
+    console.error(err);
+    loadedFileEl.textContent = 'Errore nel caricamento del GLB';
+    setStatus('GLB non valido o non leggibile', 'err');
+  });
+}
+
+glbFileInput.addEventListener('change', () => {
+  loadExternalGlb(glbFileInput.files?.[0]);
+});
 
 function base64ToArrayBuffer(b64) {
   const binary = atob(b64);
@@ -333,6 +469,7 @@ function loadGlassesModels() {
 }
 
 function showModel(name) {
+  if (externalModel) externalModel.visible = false;
   Object.values(glassesModels).forEach(g => g.visible = false);
   if (glassesModels[name]) {
     glassesModels[name].visible = true;
