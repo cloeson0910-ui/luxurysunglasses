@@ -240,11 +240,49 @@ camera.position.set(0, 0, 0);
 
 // Anchor: riceve la matrice di trasformazione del volto ad ogni frame.
 const faceAnchor = new THREE.Group();
+faceAnchor.visible = false;
 scene.add(faceAnchor);
 
 // Offset di calibrazione manuale (sliders), applicato come figlio dell'anchor.
 const calibGroup = new THREE.Group();
 faceAnchor.add(calibGroup);
+
+// Sfera di debug: mostra dove l'anchor pensa di trovare il volto, indipendentemente
+// dal modello 3D degli occhiali — utile per capire se il problema è nel tracking
+// (ancoraggio) o nel modello (mai caricato/mai visibile). Attivabile con ?debug=1
+// nell'URL o cliccando 3 volte sul badge di stato.
+const debugMode = new URLSearchParams(location.search).has('debug');
+const debugSphere = new THREE.Mesh(
+  new THREE.SphereGeometry(0.01, 12, 12),
+  new THREE.MeshBasicMaterial({ color: 0xff3355 })
+);
+debugSphere.visible = false;
+faceAnchor.add(debugSphere);
+
+const debugInfo = document.createElement('div');
+debugInfo.style.cssText = 'position:absolute;bottom:6px;left:6px;z-index:6;font:10px monospace;color:#7be08a;background:rgba(0,0,0,0.6);padding:3px 8px;border-radius:6px;display:' + (debugMode ? 'block' : 'none') + ';';
+document.getElementById('stage').appendChild(debugInfo);
+
+/**
+ * MediaPipe FaceLandmarker restituisce la facialTransformationMatrix come array
+ * piatto di 16 numeri, ma la convenzione riga/colonna non è sempre garantita
+ * uguale in tutte le versioni della libreria. Una matrice affine valida ha
+ * SEMPRE l'ultima riga = [0,0,0,1]: la usiamo come test per capire come leggere
+ * l'array, invece di assumere alla cieca column-major (standard WebGL/Three.js).
+ */
+function matrixFromMediapipe(data) {
+  const colMajor = new THREE.Matrix4().fromArray(data);
+  const e = colMajor.elements; // three.js conserva sempre gli elements in column-major
+  const lastRowColMajor = [e[3], e[7], e[11], e[15]];
+  const looksValid =
+    Math.abs(lastRowColMajor[0]) < 0.02 &&
+    Math.abs(lastRowColMajor[1]) < 0.02 &&
+    Math.abs(lastRowColMajor[2]) < 0.02 &&
+    Math.abs(lastRowColMajor[3] - 1) < 0.02;
+  if (looksValid) return colMajor;
+  // Altrimenti l'array era in row-major: la trasposizione lo corregge.
+  return new THREE.Matrix4().fromArray(data).transpose();
+}
 
 const glassesModels = {}; // nome -> THREE.Group (clonabile)
 let currentGlasses = null;
@@ -372,15 +410,30 @@ function renderLoop() {
 
     if (results.facialTransformationMatrixes && results.facialTransformationMatrixes.length > 0) {
       noFaceFrames = 0;
-      setStatus('Volto rilevato', 'ok');
       const m = results.facialTransformationMatrixes[0].data;
-      const mat = new THREE.Matrix4().fromArray(m);
+      const mat = matrixFromMediapipe(m);
       mat.decompose(faceAnchor.position, faceAnchor.quaternion, faceAnchor.scale);
-      faceAnchor.visible = true;
+
+      // Sicurezza: una scala anomala (0, negativa o enorme) indica quasi sempre
+      // un problema di lettura della matrice più che un volto "malformato" —
+      // meglio ignorare il frame che mostrare l'occhiale fuori scala/invisibile.
+      const s = faceAnchor.scale;
+      const scaleOk = s.x > 0.2 && s.x < 5 && s.y > 0.2 && s.y < 5 && s.z > 0.2 && s.z < 5;
+      faceAnchor.visible = scaleOk;
+      setStatus(scaleOk ? 'Volto rilevato' : 'Volto rilevato (dati instabili)', scaleOk ? 'ok' : 'wait');
+
+      if (debugMode) {
+        debugSphere.visible = true;
+        debugInfo.textContent =
+          `pos ${faceAnchor.position.x.toFixed(3)}, ${faceAnchor.position.y.toFixed(3)}, ${faceAnchor.position.z.toFixed(3)} | ` +
+          `scale ${s.x.toFixed(2)}, ${s.y.toFixed(2)}, ${s.z.toFixed(2)}`;
+      }
     } else {
       noFaceFrames++;
       if (noFaceFrames > 8) {
         setStatus('Nessun volto rilevato — inquadra il viso', 'wait');
+        faceAnchor.visible = false;
+        debugSphere.visible = false;
       }
     }
   }
