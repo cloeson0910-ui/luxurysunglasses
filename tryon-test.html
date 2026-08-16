@@ -165,19 +165,19 @@
     <div class="sliders">
       <div class="slider-row">
         <label><span>Scala</span><span id="v-scale">1.00</span></label>
-        <input type="range" id="s-scale" min="0.5" max="1.8" step="0.01" value="1">
+        <input type="range" id="s-scale" min="0.6" max="1.5" step="0.01" value="1">
       </div>
       <div class="slider-row">
-        <label><span>Alto / Basso</span><span id="v-y">0.0</span></label>
-        <input type="range" id="s-y" min="-25" max="25" step="0.5" value="0">
+        <label><span>Alto / Basso (cm)</span><span id="v-y">0.0</span></label>
+        <input type="range" id="s-y" min="-4" max="4" step="0.1" value="0">
       </div>
       <div class="slider-row">
-        <label><span>Avanti / Indietro</span><span id="v-z">0.0</span></label>
-        <input type="range" id="s-z" min="-30" max="30" step="0.5" value="0">
+        <label><span>Avanti / Indietro (cm)</span><span id="v-z">0.0</span></label>
+        <input type="range" id="s-z" min="-6" max="6" step="0.1" value="0">
       </div>
       <div class="slider-row">
-        <label><span>Sinistra / Destra</span><span id="v-x">0.0</span></label>
-        <input type="range" id="s-x" min="-25" max="25" step="0.5" value="0">
+        <label><span>Sinistra / Destra (cm)</span><span id="v-x">0.0</span></label>
+        <input type="range" id="s-x" min="-4" max="4" step="0.1" value="0">
       </div>
     </div>
   </details>
@@ -247,7 +247,11 @@ camera.position.set(0, 0, 0);
 // Fattore di conversione: i modelli .glb sono stati disegnati in metri
 // (es. raggio lente ≈ 0.05 = 5cm). Nello spazio di MediaPipe (≈ millimetri)
 // la stessa lente deve misurare ≈ 50 unità, quindi si moltiplica per 1000.
-const MEDIAPIPE_UNIT_SCALE = 1000;
+// Valore corretto in base alla documentazione ufficiale Google (non più a occhio):
+// "A metric unit used by the default canonical face model is a centimeter"
+// (developers.googleblog.com/mediapipe-3d-face-transform). I modelli .glb sono
+// in metri, quindi il fattore di conversione esatto metri→cm è ×100.
+const MEDIAPIPE_UNIT_SCALE = 100;
 
 // Anchor: riceve la matrice di trasformazione del volto ad ogni frame.
 const faceAnchor = new THREE.Group();
