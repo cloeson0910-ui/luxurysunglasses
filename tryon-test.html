@@ -34,7 +34,7 @@
   #stage {
     position: relative;
     width: min(640px, 92vw);
-    aspect-ratio: 4 / 3;
+    aspect-ratio: 4 / 3; /* valore iniziale, corretto via JS con l'aspect ratio reale della fotocamera */
     background: #000;
     border-radius: 12px;
     overflow: hidden;
@@ -385,6 +385,16 @@ async function startCamera() {
   video.srcObject = stream;
   await new Promise(resolve => { video.onloadedmetadata = resolve; });
   video.play();
+
+  // FONDAMENTALE: il riquadro deve avere le stesse proporzioni del flusso video
+  // reale della fotocamera, altrimenti object-fit:cover ritaglia il video in modo
+  // asimmetrico e le coordinate del volto calcolate da MediaPipe (sul frame intero,
+  // non ritagliato) non corrispondono più a dove il video viene davvero disegnato
+  // sullo schermo — gli occhiali finiscono spostati o del tutto fuori vista.
+  // Su iPhone/Safari il flusso reale è quasi sempre diverso dal 4:3 di default.
+  if (video.videoWidth && video.videoHeight) {
+    stage.style.aspectRatio = `${video.videoWidth} / ${video.videoHeight}`;
+  }
 }
 
 function resizeRenderer() {
@@ -446,6 +456,9 @@ startBtn.addEventListener('click', async () => {
     setStatus('Richiesta accesso fotocamera…', 'wait');
     statusEl.style.display = 'block';
     await startCamera();
+    // Doppio requestAnimationFrame: dà al browser il tempo di applicare il nuovo
+    // aspect-ratio del riquadro (impostato in startCamera) prima di misurarlo.
+    await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));
     resizeRenderer();
     await initFaceLandmarker();
     loadGlassesModels();
