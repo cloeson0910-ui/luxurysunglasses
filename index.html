@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Virtual Try-On — Occhiali 3D</title>
+<title>Virtual Try-On — Occhiali 3D v3</title>
 <style>
   :root {
     --bronze: #1a1512;
@@ -138,7 +138,7 @@
 
 <header>
   <h1>Virtual Try-On</h1>
-  <p>Prova le montature 3D in tempo reale</p>
+  <p>Prova le montature 3D in tempo reale · v3</p>
 </header>
 
 <div id="stage">
@@ -243,58 +243,87 @@ let currentGlasses = null;
 const loader = new GLTFLoader();
 
 const MODEL_FILES = {
-  "sunglasses": { url: "models/Sunglasses.glb", rx: 0, ry: 0, rz: 0, widthFactor: 1.78, yFactor: 0.04 },
-  "classic":    { url: "models/10320_Sunglasses.glb", rx: Math.PI / 2, ry: 0, rz: 0, widthFactor: 1.78, yFactor: 0.04 },
-  "glass":      { url: "models/glass.glb", rx: 0, ry: 0, rz: 0, widthFactor: 1.78, yFactor: 0.04 },
-  "sun-12983":  { url: "models/12983_Sunglasses.glb", rx: Math.PI / 2, ry: 0, rz: 0, widthFactor: 1.78, yFactor: 0.04 }
+  // Preset individuali: ogni sorgente 3D usa assi e proporzioni differenti.
+  "sunglasses": { url: "models/sunglasses-v3.glb", rx: 0, ry: 0, rz: 0, widthFactor: 1.64, yFactor: 0.015 },
+  "classic":    { url: "models/classic-v3.glb", rx: -Math.PI / 2, ry: 0, rz: 0, widthFactor: 1.66, yFactor: 0.015 },
+  "glass":      { url: "models/glass-v3.glb", rx: 0, ry: 0, rz: 0, widthFactor: 1.64, yFactor: 0.015 },
+  "sun-12983":  { url: "models/sun-12983-v3.glb", rx: -Math.PI / 2, ry: 0, rz: 0, widthFactor: 1.66, yFactor: 0.015 }
 };
 
-function prepareModel(group, cfg) {
-  group.rotation.set(cfg.rx || 0, cfg.ry || 0, cfg.rz || 0);
-  group.updateMatrixWorld(true);
+function prepareModel(rawScene, cfg) {
+  // IMPORTANT: orientamento/centratura e normalizzazione sono separati.
+  // Nella versione precedente venivano fatti sullo stesso Group: in Three.js
+  // la successiva scale() non ridimensionava la translation usata per centrare
+  // il modello, generando l'enorme offset visibile sopra la testa.
+  const root = new THREE.Group();
+  const oriented = new THREE.Group();
+  oriented.add(rawScene);
+  oriented.rotation.set(cfg.rx || 0, cfg.ry || 0, cfg.rz || 0);
+  root.add(oriented);
 
-  let box = new THREE.Box3().setFromObject(group);
-  let size = new THREE.Vector3();
-  let center = new THREE.Vector3();
-  box.getSize(size); box.getCenter(center);
-  group.position.sub(center);
-  group.updateMatrixWorld(true);
+  root.updateMatrixWorld(true);
+  let box = new THREE.Box3().setFromObject(root);
+  const size = new THREE.Vector3();
+  const center = new THREE.Vector3();
+  box.getSize(size);
+  box.getCenter(center);
 
-  // Dopo la rotazione, normalizziamo la larghezza X a 1 unità.
-  box = new THREE.Box3().setFromObject(group);
+  // La translation resta nel gruppo interno e viene quindi scalata insieme
+  // alla geometria dal gruppo root.
+  oriented.position.sub(center);
+  root.updateMatrixWorld(true);
+
+  box = new THREE.Box3().setFromObject(root);
   box.getSize(size);
   const width = Math.max(size.x, 0.000001);
-  group.scale.multiplyScalar(1 / width);
+  root.scale.setScalar(1 / width);
 
-  group.traverse(o => {
+  root.traverse(o => {
     if (!o.isMesh) return;
     o.frustumCulled = false;
     const mats = Array.isArray(o.material) ? o.material : [o.material];
     mats.filter(Boolean).forEach(m => {
       m.side = THREE.DoubleSide;
-      if ('transparent' in m && m.opacity < 0.08) m.opacity = 0.35;
+      if ('transparent' in m && m.transparent && m.opacity < 0.12) m.opacity = 0.42;
+      m.depthWrite = !m.transparent || m.opacity > 0.85;
       m.needsUpdate = true;
     });
   });
+
+  return root;
 }
 
 function loadGlassesModels() {
   let completed = 0;
+  let okCount = 0;
   const entries = Object.entries(MODEL_FILES);
+
   entries.forEach(([name, cfg]) => {
     loader.load(cfg.url, gltf => {
-      const group = gltf.scene;
-      prepareModel(group, cfg);
-      group.visible = false;
-      glassesModels[name] = group;
-      calibGroup.add(group);
+      const root = prepareModel(gltf.scene, cfg);
+      root.visible = false;
+      glassesModels[name] = root;
+      calibGroup.add(root);
+
       completed++;
+      okCount++;
+
       if (name === currentModelName) showModel(name);
-      if (completed === entries.length) setStatus('Modelli 3D pronti · inquadra il volto', 'ok');
+
+      if (completed === entries.length) {
+        setStatus(`4 montature caricate · ${okCount}/4 pronte`, okCount === 4 ? 'ok' : 'err');
+      }
     }, undefined, err => {
       console.error('Errore modello', name, err);
       completed++;
-      setStatus('Errore caricamento modello: ' + name, 'err');
+      const btn = document.querySelector(`.g-btn[data-model="${name}"]`);
+      if (btn) {
+        btn.disabled = true;
+        btn.style.opacity = '.35';
+      }
+      if (completed === entries.length) {
+        setStatus(`Montature disponibili: ${okCount}/4`, okCount ? 'wait' : 'err');
+      }
     });
   });
 }
@@ -302,9 +331,13 @@ function loadGlassesModels() {
 function showModel(name) {
   Object.values(glassesModels).forEach(g => g.visible = false);
   currentModelName = name;
-  if (glassesModels[name]) {
-    currentGlasses = glassesModels[name];
+  currentGlasses = glassesModels[name] || null;
+
+  if (currentGlasses) {
     currentGlasses.visible = true;
+    setStatus(`Montatura attiva: ${name}`, 'ok');
+  } else {
+    setStatus('Montatura in caricamento…', 'wait');
   }
 }
 
@@ -334,6 +367,7 @@ document.querySelectorAll('.g-btn').forEach(btn => {
   btn.addEventListener('click', () => {
     document.querySelectorAll('.g-btn').forEach(b => b.classList.remove('active'));
     btn.classList.add('active');
+    smooth.init = false;
     showModel(btn.dataset.model);
   });
 });
@@ -397,39 +431,54 @@ function updateGlassesFromLandmarks(lm) {
   const r = stage.getBoundingClientRect();
   const W = r.width, H = r.height;
 
-  // MediaPipe Face Mesh: 33 e 263 sono gli angoli esterni degli occhi.
-  const left = lm[33];
-  const right = lm[263];
-  if (!left || !right) return false;
+  // Angoli esterni degli occhi: stabili anche con espressioni del volto.
+  const pL = lm[33];
+  const pR = lm[263];
+  if (!pL || !pR) return false;
 
-  const dx = (right.x-left.x) * W;
-  const dy = (right.y-left.y) * H;
-  const eyeDist = Math.hypot(dx,dy);
+  // Coordinate del video NON specchiate. Video e canvas vengono poi specchiati
+  // insieme via CSS, quindi non bisogna invertire i landmark una seconda volta.
+  const xL = pL.x * W;
+  const yL = pL.y * H;
+  const xR = pR.x * W;
+  const yR = pR.y * H;
+
+  const dx = xR - xL;
+  const dy = yR - yL;
+  const eyeDist = Math.hypot(dx, dy);
   if (!Number.isFinite(eyeDist) || eyeDist < 18) return false;
 
-  const midX = ((left.x+right.x)*0.5 - 0.5) * W;
-  const midY = (0.5 - (left.y+right.y)*0.5) * H;
+  const midScreenX = (xL + xR) * 0.5;
+  const midScreenY = (yL + yR) * 0.5;
+
+  // Conversione screen -> coordinate ortografiche Three.js.
+  const targetX = midScreenX - W * 0.5;
+  const targetY = H * 0.5 - midScreenY;
+
+  // L'asse Y del canvas è opposto a quello dell'immagine.
   const roll = -Math.atan2(dy, dx);
+
   const cfg = MODEL_FILES[currentModelName] || MODEL_FILES.sunglasses;
   const targetW = eyeDist * cfg.widthFactor;
 
-  const a = smooth.init ? 0.32 : 1;
-  smooth.x += (midX-smooth.x)*a;
-  smooth.y += (midY-smooth.y)*a;
-  smooth.w += (targetW-smooth.w)*a;
+  // Filtro adattivo: abbastanza stabile da non vibrare ma segue la testa.
+  const a = smooth.init ? 0.42 : 1;
+  smooth.x += (targetX - smooth.x) * a;
+  smooth.y += (targetY - smooth.y) * a;
+  smooth.w += (targetW - smooth.w) * a;
   smooth.roll = lerpAngle(smooth.roll, roll, a);
   smooth.init = true;
 
-  // Slider: offset espresso visivamente in "cm" ma convertito in pixel in modo proporzionale.
-  const unitPx = eyeDist * 0.055;
+  const unitPx = eyeDist * 0.04;
   faceAnchor.position.set(
-    smooth.x + Number(sX.value)*unitPx,
-    smooth.y + Number(sY.value)*unitPx + eyeDist*cfg.yFactor,
-    Number(sZ.value)*0.5
+    smooth.x + Number(sX.value) * unitPx,
+    smooth.y + eyeDist * cfg.yFactor + Number(sY.value) * unitPx,
+    Number(sZ.value) * 0.35
   );
+
   const sc = smooth.w * Number(sScale.value);
-  faceAnchor.scale.set(sc,sc,sc);
-  faceAnchor.rotation.set(0,0,smooth.roll);
+  faceAnchor.scale.setScalar(sc);
+  faceAnchor.rotation.set(0, 0, smooth.roll);
   faceAnchor.visible = !!currentGlasses;
   return true;
 }
